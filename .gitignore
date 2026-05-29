@@ -1,0 +1,53 @@
+HELP.md
+target/
+
+### Runtime logs (generated at startup — not source) ###
+*.log
+run.log
+run.out.log
+run.err.log
+run.live.log
+frontend.out.log
+
+### Internal planning docs ###
+plan.md
+
+### Local secrets (Neon datasource creds + Clerk keys) ###
+**/application-local.properties
+frontend/.env
+frontend/.env.local
+
+### Node / frontend tooling ###
+frontend/node_modules/
+frontend/dist/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
