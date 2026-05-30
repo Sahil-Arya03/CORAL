@@ -1,8 +1,11 @@
 spring.application.name=Coral
 server.port=8080
 
-# Local-only overrides (Neon datasource credentials). Kept out of git.
-spring.config.import=optional:classpath:application-local.properties
+# --- Neon PostgreSQL ---
+spring.datasource.url=jdbc:postgresql://<host>/<db>?sslmode=require
+spring.datasource.username=<username>
+spring.datasource.password=<password>
+spring.datasource.driver-class-name=org.postgresql.Driver
 
 # HikariCP tuning for Neon serverless — connections are dropped after ~5 min idle.
 # max-lifetime must be shorter than Neon's server-side timeout so HikariCP retires
@@ -14,18 +17,23 @@ spring.datasource.hikari.minimum-idle=1
 spring.datasource.hikari.maximum-pool-size=5
 spring.datasource.hikari.idle-timeout=120000
 
-# GitHub sync — set real values in application-local.properties (git-ignored).
+# DB init — set mode=always once to re-apply schema.sql + seed.sql (drops everything),
+# then switch back to never so runtime data persists across restarts.
+spring.sql.init.mode=never
+spring.sql.init.schema-locations=file:db/schema.sql
+spring.sql.init.data-locations=file:db/seed.sql
+spring.sql.init.continue-on-error=false
+
+# --- GitHub sync ---
 # token: Personal Access Token with repo:read scope (or a fine-grained PAT).
 # repos: comma-separated list of "owner/repo" pairs to sync.
-# sync-interval-ms: how often to poll; default 30 min.
 coral.github.token=
 coral.github.repos=
 coral.github.sync-interval-ms=1800000
 
-# Groq via the OpenAI-compatible API. Paste your Groq key below for live reasoning.
-# With the placeholder, AI calls fail fast and the orchestrator falls back to deterministic
+# --- Groq via the OpenAI-compatible API ---
+# With an empty key, AI calls fail fast and the orchestrator falls back to deterministic
 # heuristics — the app still runs end to end.
-# Paste your Groq key in application-local.properties (git-ignored), NOT here.
-# spring.ai.openai.api-key=YOUR_GROQ_API_KEY_HERE
+spring.ai.openai.api-key=<your-groq-api-key>
 spring.ai.openai.base-url=https://api.groq.com/openai/v1
 spring.ai.openai.chat.options.model=llama-3.3-70b-versatile

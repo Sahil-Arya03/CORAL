@@ -12,8 +12,8 @@ frontend.out.log
 ### Internal planning docs ###
 plan.md
 
-### Local secrets (Neon datasource creds + Clerk keys) ###
-**/application-local.properties
+### Local secrets (Neon datasource creds + API keys) ###
+**/application.properties
 frontend/.env
 frontend/.env.local
 
