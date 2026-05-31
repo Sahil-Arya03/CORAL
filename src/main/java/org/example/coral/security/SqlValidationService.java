@@ -6,6 +6,7 @@ import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.Statements;
 import net.sf.jsqlparser.statement.delete.Delete;
+import net.sf.jsqlparser.statement.insert.Insert;
 import net.sf.jsqlparser.statement.select.AllColumns;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
@@ -84,6 +85,7 @@ public class SqlValidationService {
         List<String> writeFields = new ArrayList<>();
         switch (type) {
             case SELECT -> validateSelect((Select) stmt, knownColumns);
+            case INSERT -> writeFields.addAll(validateInsert((Insert) stmt, spec, knownColumns));
             case UPDATE -> writeFields.addAll(validateUpdate((Update) stmt, spec, knownColumns));
             case DELETE -> validateDelete((Delete) stmt, knownColumns);
         }
@@ -104,14 +106,24 @@ public class SqlValidationService {
             return list.get(0);
         } catch (ValidationException ve) {
             throw ve;
-        } catch (Exception e) {
-            // Unparseable, or a statement type JSqlParser flags — treat as unsafe.
-            throw new ValidationException("Unparseable or unsupported SQL: " + e.getMessage());
+        } catch (Exception first) {
+            // JSqlParser 4.x treats 'events' as a reserved keyword (MySQL CREATE EVENT grammar),
+            // so FROM calendar.events fails to parse. Quote the identifier and retry once.
+            if (sql.toLowerCase(java.util.Locale.ROOT).contains("calendar.events")) {
+                String rewritten = sql.replaceAll("(?i)calendar\\.events", "\"calendar\".\"events\"");
+                try {
+                    Statements statements2 = CCJSqlParserUtil.parseStatements(rewritten);
+                    List<Statement> list = statements2.getStatements();
+                    if (list.size() == 1) return list.get(0);
+                } catch (Exception ignored) {}
+            }
+            throw new ValidationException("Unparseable or unsupported SQL: " + first.getMessage());
         }
     }
 
     private StatementType statementType(Statement stmt) {
         if (stmt instanceof Select) return StatementType.SELECT;
+        if (stmt instanceof Insert) return StatementType.INSERT;
         if (stmt instanceof Update) return StatementType.UPDATE;
         if (stmt instanceof Delete) return StatementType.DELETE;
         // DROP, ALTER, TRUNCATE, CREATE, GRANT, etc. all land here.
@@ -131,6 +143,10 @@ public class SqlValidationService {
                     }
                 });
             }
+        } else if (stmt instanceof Insert insert) {
+            if (insert.getTable() != null) {
+                names.add(stripQuotes(insert.getTable().getFullyQualifiedName()));
+            }
         } else if (stmt instanceof Update update) {
             names.add(stripQuotes(update.getTable().getFullyQualifiedName()));
         } else if (stmt instanceof Delete delete) {
@@ -141,6 +157,26 @@ public class SqlValidationService {
 
     private String primaryTable(Statement stmt, List<String> tables) {
         return tables.get(0);
+    }
+
+    private List<String> validateInsert(Insert insert, TableSpec spec, Set<String> knownColumns) {
+        if (insert.getColumns() == null || insert.getColumns().isEmpty()) {
+            throw new ValidationException("INSERT must list explicit columns; implicit column-order inserts are not allowed");
+        }
+        List<String> writeFields = new ArrayList<>();
+        for (Column col : insert.getColumns()) {
+            String name = col.getColumnName();
+            // id and user_id are backend-managed — the AI must never include them
+            if (name.equals("id") || name.equals("user_id")) {
+                throw new ValidationException("Column '" + name + "' is managed by the backend; omit it from INSERT");
+            }
+            requireKnownColumn(name, knownColumns);
+            if (!spec.isMutable(name) && !name.equals("updated_at")) {
+                throw new ValidationException("Column '" + name + "' is not insertable for " + spec.name());
+            }
+            writeFields.add(name);
+        }
+        return writeFields;
     }
 
     private void validateSelect(Select select, Set<String> knownColumns) {
@@ -224,6 +260,7 @@ public class SqlValidationService {
 
     private String normalize(Statement stmt, StatementType type) {
         String sql = stmt.toString();
+        // Only SELECT gets an automatic LIMIT — INSERT/UPDATE/DELETE are not row-limited this way.
         if (type == StatementType.SELECT && stmt instanceof PlainSelect ps && ps.getLimit() == null) {
             sql = sql + " LIMIT " + DEFAULT_LIMIT;
         }

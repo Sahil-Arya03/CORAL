@@ -1,5 +1,7 @@
 package org.example.coral.controller;
 
+import jakarta.servlet.http.HttpServletRequest;
+import org.example.coral.config.SecurityUtils;
 import org.example.coral.memory.LongTermMemoryService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -11,8 +13,6 @@ import java.util.Map;
 @RequestMapping("/api/memory")
 public class MemoryController {
 
-    private static final long DEMO_USER_ID = 1L;
-
     private final LongTermMemoryService memory;
 
     public MemoryController(LongTermMemoryService memory) {
@@ -20,13 +20,17 @@ public class MemoryController {
     }
 
     @GetMapping
-    public List<Map<String, Object>> list() {
-        return memory.list(DEMO_USER_ID);
+    public List<Map<String, Object>> list(HttpServletRequest request) {
+        return memory.list(uid(request));
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable long id) {
-        memory.delete(DEMO_USER_ID, id);
+    public ResponseEntity<Void> delete(@PathVariable long id, HttpServletRequest request) {
+        memory.delete(uid(request), id);
         return ResponseEntity.noContent().build();
+    }
+
+    private static long uid(HttpServletRequest req) {
+        try { return SecurityUtils.getInternalUserId(req); } catch (Exception e) { return 1L; }
     }
 }

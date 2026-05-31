@@ -1,6 +1,8 @@
 package org.example.coral.controller;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.example.coral.analytics.TimelineService;
+import org.example.coral.config.SecurityUtils;
 import org.example.coral.model.TimelineEvent;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -19,7 +21,12 @@ public class TimelineController {
     }
 
     @GetMapping("/timeline")
-    public List<TimelineEvent> timeline() {
-        return timelineService.buildTimeline();
+    public List<TimelineEvent> timeline(HttpServletRequest request) {
+        String clerkUserId = resolveClerkId(request);
+        return timelineService.buildTimeline(clerkUserId);
+    }
+
+    private static String resolveClerkId(HttpServletRequest req) {
+        try { return SecurityUtils.getClerkUserId(req); } catch (Exception e) { return "dev_user"; }
     }
 }

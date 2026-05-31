@@ -79,9 +79,11 @@ export async function confirmAction(token) {
   return res.json(); // ActionResult { executed, message, rowsAffected }
 }
 
-/** GET /api/timeline — unified cross-source activity stream. */
-export async function fetchTimeline() {
-  const res = await fetch('/api/timeline');
+/** GET /api/timeline — unified cross-source activity stream, scoped to current user. */
+export async function fetchTimeline(token) {
+  const res = await fetch('/api/timeline', {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!res.ok) throw new Error(`timeline failed: ${res.status}`);
   return res.json(); // TimelineEvent[]
 }
@@ -135,6 +137,163 @@ export async function fetchMemories() {
 export async function deleteMemory(id) {
   const res = await fetch(`/api/memory/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`delete memory failed: ${res.status}`);
+}
+
+// ── Calendar event CRUD (write-back to Google Calendar) ─────────────────────
+
+async function calendarFetch(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    let msg = `Request failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body?.error) msg = body.error;
+    } catch { /* ignore parse error */ }
+    const err = Object.assign(new Error(msg), { status: res.status });
+    throw err;
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+export async function createCalendarEvent(event, token) {
+  return calendarFetch('/api/calendar/events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(event),
+  });
+}
+
+export async function updateCalendarEvent(id, event, token) {
+  return calendarFetch(`/api/calendar/events/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(event),
+  });
+}
+
+export async function deleteCalendarEvent(id, token) {
+  return calendarFetch(`/api/calendar/events/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+}
+
+// ── Integration sync (legacy global) ────────────────────────────────────────
+
+/** GET /api/sync/status — last_synced_at per integration (global). */
+export async function fetchSyncStatus() {
+  const res = await fetch('/api/sync/status');
+  if (!res.ok) throw new Error(`sync status failed: ${res.status}`);
+  return res.json();
+}
+
+/** POST /api/sync/:source — trigger an immediate global sync. */
+export async function triggerSync(source) {
+  const res = await fetch(`/api/sync/${source}`, { method: 'POST' });
+  if (!res.ok) throw new Error(`sync ${source} failed: ${res.status}`);
+  return res.json();
+}
+
+// ── Per-user integrations ─────────────────────────────────────────────────────
+
+function authHeaders(token) {
+  return token ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+               : { 'Content-Type': 'application/json' };
+}
+
+/** GET /api/integrations — list connected integrations for current user. */
+export async function fetchIntegrations(token) {
+  const res = await fetch('/api/integrations', { headers: authHeaders(token) });
+  if (!res.ok) throw new Error(`integrations failed: ${res.status}`);
+  return res.json(); // IntegrationDto[]
+}
+
+/** GET /api/integrations/status — per-user connection status. */
+export async function fetchIntegrationStatus(token) {
+  const res = await fetch('/api/integrations/status', { headers: authHeaders(token) });
+  if (!res.ok) throw new Error(`integration status failed: ${res.status}`);
+  return res.json(); // { github:{connected,lastSyncedAt}, google:{...}, notion:{...} }
+}
+
+/** GET /api/integrations/google/auth-url — returns Google OAuth URL. */
+export async function fetchGoogleAuthUrl(token) {
+  const res = await fetch('/api/integrations/google/auth-url', { headers: authHeaders(token) });
+  if (!res.ok) throw new Error(`auth url failed: ${res.status}`);
+  return res.json(); // { url }
+}
+
+/** GET /api/integrations/notion/auth-url — returns Notion OAuth consent URL. */
+export async function fetchNotionAuthUrl(token) {
+  const res = await fetch('/api/integrations/notion/auth-url', { headers: authHeaders(token) });
+  if (!res.ok) {
+    let msg = `notion auth url failed: ${res.status}`;
+    try { const b = await res.json(); if (b?.error) msg = b.error; } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return res.json(); // { url }
+}
+
+/** POST /api/integrations/notion/callback — exchange OAuth code + database ID for tokens. */
+export async function submitNotionCode(code, databaseId, token) {
+  const res = await fetch('/api/integrations/notion/callback', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ code, databaseId }),
+  });
+  if (!res.ok) throw new Error(`notion callback failed: ${res.status}`);
+  return res.json(); // { connected, workspaceId, workspaceName }
+}
+
+/** POST /api/integrations/google/callback — exchange OAuth code for tokens. */
+export async function submitGoogleCode(code, token) {
+  const res = await fetch('/api/integrations/google/callback', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw new Error(`google callback failed: ${res.status}`);
+  return res.json();
+}
+
+/** POST /api/integrations/github — save PAT token + repos. */
+export async function connectGitHub(pat, repos, token) {
+  const res = await fetch('/api/integrations/github', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ token: pat, repos }),
+  });
+  if (!res.ok) throw new Error(`github connect failed: ${res.status}`);
+  return res.json();
+}
+
+/** POST /api/integrations/notion — save integration token + database ID. */
+export async function connectNotion(notionToken, databaseId, clerkToken) {
+  const res = await fetch('/api/integrations/notion', {
+    method: 'POST',
+    headers: authHeaders(clerkToken),
+    body: JSON.stringify({ token: notionToken, databaseId }),
+  });
+  if (!res.ok) throw new Error(`notion connect failed: ${res.status}`);
+  return res.json();
+}
+
+/** DELETE /api/integrations/:provider — disconnect an integration. */
+export async function disconnectIntegration(provider, token) {
+  const res = await fetch(`/api/integrations/${provider}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error(`disconnect failed: ${res.status}`);
+}
+
+/** POST /api/integrations/:provider/sync — trigger manual sync for current user. */
+export async function syncIntegration(provider, token) {
+  const res = await fetch(`/api/integrations/${provider}/sync`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error(`sync failed: ${res.status}`);
+  return res.json();
 }
 
 // ── Auth / user sync ─────────────────────────────────────────────────────────

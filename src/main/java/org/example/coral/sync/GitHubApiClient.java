@@ -33,18 +33,19 @@ class GitHubApiClient {
                 .build();
     }
 
-    /**
-     * Fetch one page of commits for a repo.
-     * @param since  only commits at or after this instant; null fetches all
-     * @param page   1-based page number
-     */
+    /** Fetch commits using the global PAT from GitHubProperties. */
     List<CommitItem> fetchCommits(String owner, String repo, Instant since, int page) {
+        return fetchCommitsWithToken(owner, repo, since, page, props.token());
+    }
+
+    /** Fetch commits using an explicit per-user PAT. */
+    List<CommitItem> fetchCommitsWithToken(String owner, String repo, Instant since, int page, String token) {
         try {
             String uri = "/repos/{owner}/{repo}/commits?per_page={ps}&page={pg}"
                     + (since != null ? "&since={since}" : "");
             List<CommitResponse> raw = http.get()
                     .uri(uri, owner, repo, PAGE_SIZE, page, since != null ? since.toString() : "")
-                    .header("Authorization", "Bearer " + props.token())
+                    .header("Authorization", "Bearer " + token)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {});
             if (raw == null) return List.of();
@@ -55,16 +56,18 @@ class GitHubApiClient {
         }
     }
 
-    /**
-     * Fetch one page of pull requests sorted by updated_at DESC.
-     * Callers stop paging when all items on a page predate their since timestamp.
-     */
+    /** Fetch pull requests using the global PAT from GitHubProperties. */
     List<PullItem> fetchPulls(String owner, String repo, int page) {
+        return fetchPullsWithToken(owner, repo, page, props.token());
+    }
+
+    /** Fetch pull requests using an explicit per-user PAT. */
+    List<PullItem> fetchPullsWithToken(String owner, String repo, int page, String token) {
         try {
             List<PullResponse> raw = http.get()
                     .uri("/repos/{owner}/{repo}/pulls?state=all&sort=updated&direction=desc&per_page={ps}&page={pg}",
                             owner, repo, PAGE_SIZE, page)
-                    .header("Authorization", "Bearer " + props.token())
+                    .header("Authorization", "Bearer " + token)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {});
             if (raw == null) return List.of();

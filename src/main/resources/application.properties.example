@@ -25,11 +25,40 @@ spring.sql.init.data-locations=file:db/seed.sql
 spring.sql.init.continue-on-error=false
 
 # --- GitHub sync ---
-# token: Personal Access Token with repo:read scope (or a fine-grained PAT).
-# repos: comma-separated list of "owner/repo" pairs to sync.
+# Per-user sync (preferred): users connect their own PATs via the Integrations page.
+# Global sync (optional): set token + repos to sync shared repos on a schedule.
 coral.github.token=
 coral.github.repos=
 coral.github.sync-interval-ms=1800000
+
+# --- Google (Gmail + Calendar) ---
+# Create an OAuth 2.0 client in Google Cloud Console (type: Web application).
+# Add http://localhost:5173/integrations as an Authorized Redirect URI.
+# coral.google.refresh-token is NOT required for per-user OAuth — leave blank.
+coral.google.client-id=
+coral.google.client-secret=
+coral.google.refresh-token=
+coral.google.redirect-uri=http://localhost:5173/integrations
+coral.google.gmail.sync-interval-ms=900000
+coral.google.calendar.sync-interval-ms=1800000
+
+# --- Notion ---
+# Create a public integration at notion.so/my-integrations, enable the "Authorization"
+# capability, and paste the OAuth client ID + secret below.
+# redirect-uri must be registered as a redirect URI in your Notion integration settings.
+# Users then connect via the Integrations UI — no token or database-id needed here.
+coral.notion.client-id=
+coral.notion.client-secret=
+coral.notion.redirect-uri=http://localhost:5173/integrations
+coral.notion.sync-interval-ms=600000
+# Legacy global sync (optional) — only if you want one shared workspace on a schedule:
+# coral.notion.token=secret_...
+# coral.notion.database-id=<UUID>
+
+# --- Clerk authentication ---
+# JWKS URL from your Clerk dashboard: Dashboard → API Keys → Advanced → JWKS URL
+# Leave blank in dev to use synthetic dev_user (no JWT verification required).
+clerk.jwks-url=
 
 # --- Groq via the OpenAI-compatible API ---
 # With an empty key, AI calls fail fast and the orchestrator falls back to deterministic

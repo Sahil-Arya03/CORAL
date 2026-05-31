@@ -57,6 +57,20 @@ body {
 button { font-family: inherit; cursor: pointer; }
 input, textarea { font-family: inherit; }
 
+.form-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 120ms ease;
+}
+.form-input:focus { border-color: var(--coral); }
+
 /* ───── Device frame ───── */
 
 .os-frame {

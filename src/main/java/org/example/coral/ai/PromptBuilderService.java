@@ -40,15 +40,31 @@ public class PromptBuilderService {
                   "entity": "free-text target like 'DBMS task' or null",
                   "targetValue": "desired new value for a mutation, or null"
                 }
-                Allowed actionType values (use one of these verbatim for MUTATE, else null):
+
+                Allowed actionType values — use EXACTLY one for MUTATE, null for everything else:
                 """ + actionList + """
 
-                Rules:
-                - Classify MUTATE only when the user explicitly asks to change/complete/delete/archive something.
-                - For MUTATE, actionType MUST be exactly one of the allowed values above — never invent one.
-                - Use REFLECT for productivity/focus/insight/pattern questions ("how am I doing", "what should I focus on", "analyse my week").
-                - Use SMALLTALK for greetings/thanks.
+                Action guide:
+                - task.create           → user wants to ADD a new task ("create a task", "add to my todo", "remind me to")
+                - task.update_status    → mark task done/in-progress/todo
+                - task.update_deadline  → change a due date
+                - task.update_priority  → change priority (high/medium/low)
+                - task.update_title     → rename a task
+                - task.update_project   → move task to a different project
+                - task.delete           → delete/remove a task permanently (requires confirmation)
+                - reminder.archive      → archive an email
+                - reminder.unarchive    → unarchive an email
+                - reminder.mark_read    → mark email(s) as read
+                - reminder.delete_dup   → delete duplicate/spam emails (requires confirmation)
+
+                Classification rules:
+                - MUTATE only when the user explicitly wants to change, create, delete, or archive something.
+                - READ for any query about existing data ("show me", "what are", "list my", "do I have").
+                - REFLECT for productivity/insight questions ("how am I doing", "what should I focus on").
+                - SMALLTALK for greetings and thanks only.
                 - Never invent sources outside the allowed list.
+                - entity = the specific item being acted on (task title, email subject, etc.)
+                - targetValue = the new value for updates (e.g. "done", "high", "2024-12-15") or task details for create
 
                 User message:
                 """ + userPrompt;
@@ -57,28 +73,38 @@ public class PromptBuilderService {
     public String planningPrompt(IntentResult intent, String schemaBlock) {
         return """
                 You are the query planning stage of CreatorOS. Generate safe Coral SQL for the intent.
-                You may ONLY use the tables and columns in the schema below. List explicit columns
-                (never SELECT *). Use named bindings (:name) for values, never string interpolation.
-                Mutations MUST include a bounded WHERE clause.
-                For UPDATE statements, SET ONLY the exact column(s) the user asked to change. NEVER
-                include audit or timestamp columns such as updated_at, created_at, or committed_at in
-                a SET clause — the backend manages those. Use only columns listed as mutable below.
 
-                SOURCE SELECTION: Query ONLY the tables that are genuinely relevant to this specific
-                intent. For a targeted question about tasks, query notion.tasks only. For a question
-                about emails, query gmail.emails only. For broad overview or cross-source questions,
-                query whichever combination of sources is actually useful. Do not generate queries
-                for unrelated tables — irrelevant data adds noise and costs latency.
+                ABSOLUTE RULES — violating any of these causes data to be silently lost:
+                1. NEVER reference the user_id or id column in any SQL — not in SELECT, not in
+                   WHERE, not in INSERT column lists. The backend injects both automatically.
+                   If you add your own user_id filter the double-condition returns zero rows.
+                2. List ONLY explicit columns (never SELECT *).
+                3. Use named bindings (:name) for values — never string interpolation.
+                4. UPDATE and DELETE MUST include a bounded WHERE clause (e.g. WHERE title = :title).
+                5. For UPDATE, SET ONLY the exact column(s) the user asked to change. Never include
+                   updated_at, created_at, committed_at, or other audit columns — the backend manages those.
+                6. For INSERT into notion.tasks: list only (title, status, priority, due_date, project).
+                   Do NOT include id, user_id, or updated_at — all three are injected by the backend.
+                   Use CAST(:due_date AS timestamptz) for due_date if the user provided a date.
 
-                WHERE CLAUSE EXECUTION: WHERE clauses are fully executed against the database.
-                Use precise, specific filters — they reduce result sets and hit DB indexes.
-                Prefer filtering on: status, priority, is_unread, is_archived, importance
-                (for exact matches) and committed_at, received_at, start_at, due_date (for time ranges).
+                SOURCE SELECTION: Query ONLY tables genuinely relevant to the intent.
+                - Tasks / to-dos / assignments → notion.tasks only
+                - Emails / inbox / unread → gmail.emails only
+                - Commits / PRs / code → github.commits and/or github.pull_requests
+                - Calendar / meetings / schedule → calendar.events only
+                - Overview / cross-source → whichever combination is useful
+                Do not query unrelated tables — irrelevant data adds noise.
 
-                Return ONLY JSON of this shape:
+                WHERE CLAUSE EXECUTION: WHERE clauses run directly against the DB.
+                Use precise filters — they hit DB indexes and reduce result sizes.
+                Prefer: status, priority, is_unread, is_archived, importance (exact match)
+                or committed_at, received_at, start_at, due_date (time ranges).
+                Never filter by user_id — see Rule 1.
+
+                Return ONLY JSON (no prose, no markdown fences):
                 {
-                  "rationale": "why these queries and which sources were chosen",
-                  "operations": [{"id": "q1", "sql": "...", "bindings": {"name": "value"}}],
+                  "rationale": "why these queries",
+                  "operations": [{"id": "q1", "sql": "...", "bindings": {}}],
                   "joinStrategy": "post-process",
                   "expectedShape": "short description"
                 }

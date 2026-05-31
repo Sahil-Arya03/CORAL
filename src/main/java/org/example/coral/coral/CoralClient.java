@@ -10,6 +10,8 @@ import net.sf.jsqlparser.statement.delete.Delete;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.update.Update;
 import org.example.coral.model.ValidatedQuery;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -17,8 +19,8 @@ import org.springframework.stereotype.Component;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -37,23 +39,15 @@ import java.util.regex.Pattern;
 @Component
 class CoralClient {
 
-    private static final Pattern NAMED_PARAM_RE = Pattern.compile(":(\\w+)");
+    private static final Logger  log             = LoggerFactory.getLogger(CoralClient.class);
+    private static final Pattern NAMED_PARAM_RE  = Pattern.compile(":(\\w+)");
 
     private final JdbcTemplate jdbc;
     private final NamedParameterJdbcTemplate named;
-    private final boolean fixtureMode;
 
     CoralClient(JdbcTemplate jdbc, NamedParameterJdbcTemplate named) {
         this.jdbc = jdbc;
         this.named = named;
-        this.fixtureMode = false;
-    }
-
-    /** Offline constructor for unit tests: returns seed-compatible in-memory fixture rows. */
-    CoralClient() {
-        this.jdbc = null;
-        this.named = null;
-        this.fixtureMode = true;
     }
 
     /**
@@ -69,8 +63,6 @@ class CoralClient {
      * Temporal columns are normalized to ISO-8601 strings so the aggregation layer stays correct.
      */
     List<Map<String, Object>> executeRead(ValidatedQuery query) {
-        if (fixtureMode) return fixtureRows(query.table());
-
         String sql = query.normalizedSql();
         Map<String, Object> bindings = query.bindings() != null ? query.bindings() : Map.of();
 
@@ -96,8 +88,6 @@ class CoralClient {
 
     /** Execute a mutation and return the affected-row count. */
     int executeMutation(ValidatedQuery query) {
-        if (fixtureMode) return 1;
-
         Map<String, Object> bindings = query.bindings();
         return (bindings == null || bindings.isEmpty())
                 ? jdbc.update(query.normalizedSql())
@@ -105,12 +95,90 @@ class CoralClient {
     }
 
     /**
+     * Execute an UPDATE or DELETE scoped to the calling user.
+     * Injects AND user_id = :_userId into the WHERE clause via JSqlParser before running,
+     * so mutations can never affect another user's rows even if the AI omits the filter.
+     */
+    int executeMutationScoped(ValidatedQuery query, String clerkUserId) {
+        if (clerkUserId == null || clerkUserId.isBlank()) {
+            return executeMutation(query);
+        }
+        try {
+            Statement stmt = CCJSqlParserUtil.parse(query.normalizedSql());
+            net.sf.jsqlparser.expression.Expression userFilter =
+                    CCJSqlParserUtil.parseCondExpression("user_id = :_userId");
+
+            if (stmt instanceof net.sf.jsqlparser.statement.update.Update u) {
+                net.sf.jsqlparser.expression.Expression existing = u.getWhere();
+                u.setWhere(existing == null ? userFilter
+                        : new AndExpression(userFilter, existing));
+            } else if (stmt instanceof net.sf.jsqlparser.statement.delete.Delete d) {
+                net.sf.jsqlparser.expression.Expression existing = d.getWhere();
+                d.setWhere(existing == null ? userFilter
+                        : new AndExpression(userFilter, existing));
+            } else {
+                return executeMutation(query);
+            }
+
+            Map<String, Object> bindings = new HashMap<>(
+                    query.bindings() != null ? query.bindings() : Map.of());
+            bindings.put("_userId", clerkUserId);
+            return named.update(stmt.toString(), bindings);
+        } catch (Exception e) {
+            log.warn("mutation user_id scope injection failed: {}", e.getMessage());
+            throw new IllegalStateException(
+                    "mutation user_id scope injection failed — cannot safely execute: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Execute an INSERT for a new task/row. Injects a generated UUID as id and the calling
+     * user's Clerk ID as user_id. The normalizedSql from the AI is modified in-place by
+     * prepending id, user_id, and updated_at to the column list and their values accordingly.
+     *
+     * Uses string manipulation rather than JSqlParser re-serialization to avoid quote-stripping
+     * issues and to preserve the AI's original CAST / function expressions in VALUES.
+     */
+    int executeInsert(ValidatedQuery query, String clerkUserId) {
+        String sql = query.normalizedSql().trim();
+
+        // Locate the column list: first parenthesised group
+        int colsOpen  = sql.indexOf('(');
+        int colsClose = findMatchingParen(sql, colsOpen);
+
+        // Locate the VALUES list: parenthesised group after the VALUES keyword
+        int valuesIdx = sql.toUpperCase(java.util.Locale.ROOT).indexOf(" VALUES ");
+        if (colsOpen < 0 || valuesIdx < 0) {
+            throw new IllegalArgumentException("Cannot parse INSERT SQL for scope injection: " + sql);
+        }
+        int valsOpen  = sql.indexOf('(', valuesIdx);
+        int valsClose = findMatchingParen(sql, valsOpen);
+
+        String prefix  = sql.substring(0, colsOpen + 1);       // "INSERT INTO notion.tasks ("
+        String cols    = sql.substring(colsOpen  + 1, colsClose);  // existing column list
+        String middle  = sql.substring(colsClose + 1, valsOpen + 1); // ") VALUES ("
+        String vals    = sql.substring(valsOpen  + 1, valsClose);    // existing value list
+
+        String uuid = java.util.UUID.randomUUID().toString();
+
+        String newSql = prefix + "id, user_id, updated_at, " + cols + ")"
+                + middle
+                + ":_id, :_userId, CAST(:_now AS timestamptz), " + vals + ")";
+
+        Map<String, Object> bindings = new HashMap<>(
+                query.bindings() != null ? query.bindings() : Map.of());
+        bindings.put("_id",     uuid);
+        bindings.put("_userId", clerkUserId);
+        bindings.put("_now",    Instant.now().toString());
+
+        return named.update(newSql, bindings);
+    }
+
+    /**
      * Non-mutating row estimate for the policy row-ceiling check: rewrites the UPDATE/DELETE
      * to SELECT COUNT(*) over the same table + WHERE, so nothing is written before confirmation.
      */
     int estimateMutation(ValidatedQuery query) {
-        if (fixtureMode) return 1;
-
         try {
             Statement stmt = CCJSqlParserUtil.parse(query.normalizedSql());
             String table;
@@ -133,6 +201,19 @@ class CoralClient {
         } catch (Exception e) {
             return 1;
         }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /** Returns the index of the closing ')' that matches the '(' at {@code openPos}. */
+    private static int findMatchingParen(String sql, int openPos) {
+        int depth = 0;
+        for (int i = openPos; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') { if (--depth == 0) return i; }
+        }
+        return sql.length() - 1;
     }
 
     // ── WHERE pruning ────────────────────────────────────────────────────────
@@ -205,71 +286,10 @@ class CoralClient {
     private static void normalizeTemporal(Map<String, Object> row) {
         for (Map.Entry<String, Object> e : row.entrySet()) {
             Object v = e.getValue();
-            if (v instanceof Timestamp ts) {
-                e.setValue(ts.toInstant().toString());
-            } else if (v instanceof OffsetDateTime odt) {
-                e.setValue(odt.toInstant().toString());
-            } else if (v instanceof Instant ins) {
-                e.setValue(ins.toString());
-            } else if (v instanceof Date d) {
-                e.setValue(d.toInstant().toString());
-            }
+            if (v instanceof Timestamp ts)            e.setValue(ts.toInstant().toString());
+            else if (v instanceof OffsetDateTime odt) e.setValue(odt.toInstant().toString());
+            else if (v instanceof Instant ins)        e.setValue(ins.toString());
+            else if (v instanceof Date d)             e.setValue(d.toInstant().toString());
         }
-    }
-
-    // ── Fixture data (offline / unit-test mode only) ─────────────────────────
-
-    private static List<Map<String, Object>> fixtureRows(String table) {
-        Instant now = Instant.now();
-        return switch (table) {
-            case "notion.tasks" -> List.of(
-                Map.of("id", "t1", "title", "Finish DBMS assignment",
-                       "status", "todo", "priority", "high",
-                       "due_date", now.minus(1, ChronoUnit.DAYS).toString(),
-                       "project", "DBMS", "updated_at", now.minus(3, ChronoUnit.DAYS).toString()),
-                Map.of("id", "t2", "title", "OS lab report",
-                       "status", "in_progress", "priority", "medium",
-                       "due_date", now.plus(2, ChronoUnit.DAYS).toString(),
-                       "project", "OS", "updated_at", now.minus(1, ChronoUnit.DAYS).toString()),
-                Map.of("id", "t3", "title", "DSA practice set",
-                       "status", "todo", "priority", "high",
-                       "due_date", now.plus(1, ChronoUnit.DAYS).toString(),
-                       "project", "DSA", "updated_at", now.minus(5, ChronoUnit.DAYS).toString())
-            );
-            case "gmail.emails" -> List.of(
-                Map.of("id", "m1", "subject", "DBMS assignment deadline moved to tomorrow",
-                       "sender", "prof@univ.edu", "snippet", "Please submit by EOD tomorrow.",
-                       "is_unread", true, "received_at", now.minus(4, ChronoUnit.HOURS).toString(),
-                       "importance", "high", "is_archived", false),
-                Map.of("id", "m2", "subject", "Weekly newsletter",
-                       "sender", "news@list.com", "snippet", "Top stories this week.",
-                       "is_unread", true, "received_at", now.minus(1, ChronoUnit.DAYS).toString(),
-                       "importance", "low", "is_archived", false)
-            );
-            case "github.commits" -> List.of(
-                Map.of("sha", "a1b2", "repo", "os-lab", "author", "arya",
-                       "message", "wip: scheduler",
-                       "committed_at", now.minus(2, ChronoUnit.DAYS).toString()),
-                Map.of("sha", "c3d4", "repo", "dsa", "author", "arya",
-                       "message", "add two-pointer solutions",
-                       "committed_at", now.minus(6, ChronoUnit.HOURS).toString())
-            );
-            case "github.pull_requests" -> List.of(
-                Map.of("id", "pr1", "repo", "os-lab", "title", "Scheduler v1",
-                       "state", "open", "created_at", now.minus(3, ChronoUnit.DAYS).toString(),
-                       "merged_at", "")
-            );
-            case "calendar.events" -> List.of(
-                Map.of("id", "e1", "title", "DBMS lecture",
-                       "start_at", now.plus(4, ChronoUnit.HOURS).toString(),
-                       "end_at", now.plus(5, ChronoUnit.HOURS).toString(),
-                       "attendees_count", 40, "is_meeting", true),
-                Map.of("id", "e2", "title", "Project sync",
-                       "start_at", now.plus(1, ChronoUnit.DAYS).toString(),
-                       "end_at", now.plus(1, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS).toString(),
-                       "attendees_count", 5, "is_meeting", true)
-            );
-            default -> List.of();
-        };
     }
 }

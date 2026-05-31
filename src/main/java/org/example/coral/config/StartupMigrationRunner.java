@@ -52,7 +52,61 @@ public class StartupMigrationRunner implements ApplicationRunner {
                     "ALTER TABLE creatoros.users ADD COLUMN IF NOT EXISTS username  TEXT");
             jdbc.getJdbcOperations().execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_clerk_id ON creatoros.users (clerk_id) WHERE clerk_id IS NOT NULL");
-            log.info("Migrations applied (chat_threads + clerk auth columns ready)");
+            // Calendar columns added when the sync adapter was wired up
+            jdbc.getJdbcOperations().execute(
+                    "ALTER TABLE calendar.events ADD COLUMN IF NOT EXISTS description TEXT");
+            jdbc.getJdbcOperations().execute(
+                    "ALTER TABLE calendar.events ADD COLUMN IF NOT EXISTS location TEXT");
+
+            // Per-user integration credentials table
+            jdbc.getJdbcOperations().execute("""
+                    CREATE TABLE IF NOT EXISTS creatoros.user_integrations (
+                        id             BIGSERIAL    PRIMARY KEY,
+                        user_id        TEXT         NOT NULL,
+                        provider       TEXT         NOT NULL,
+                        access_token   TEXT,
+                        refresh_token  TEXT,
+                        token_expiry   TIMESTAMPTZ,
+                        extra          JSONB,
+                        connected_at   TIMESTAMPTZ  DEFAULT NOW(),
+                        last_synced_at TIMESTAMPTZ,
+                        UNIQUE (user_id, provider)
+                    )
+                    """);
+            jdbc.getJdbcOperations().execute(
+                    "CREATE INDEX IF NOT EXISTS idx_user_integrations_user ON creatoros.user_integrations (user_id)");
+            jdbc.getJdbcOperations().execute(
+                    "CREATE INDEX IF NOT EXISTS idx_user_integrations_provider ON creatoros.user_integrations (provider)");
+
+            // user_id scoping column on all federated tables (Clerk user ID, TEXT)
+            for (String tbl : new String[]{
+                    "github.commits", "github.pull_requests",
+                    "notion.tasks", "calendar.events", "gmail.emails"}) {
+                jdbc.getJdbcOperations().execute(
+                        "ALTER TABLE " + tbl + " ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''");
+            }
+            jdbc.getJdbcOperations().execute(
+                    "CREATE INDEX IF NOT EXISTS idx_commits_user     ON github.commits (user_id)");
+            jdbc.getJdbcOperations().execute(
+                    "CREATE INDEX IF NOT EXISTS idx_prs_user         ON github.pull_requests (user_id)");
+            jdbc.getJdbcOperations().execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tasks_user       ON notion.tasks (user_id)");
+            jdbc.getJdbcOperations().execute(
+                    "CREATE INDEX IF NOT EXISTS idx_events_user      ON calendar.events (user_id)");
+            jdbc.getJdbcOperations().execute(
+                    "CREATE INDEX IF NOT EXISTS idx_emails_user      ON gmail.emails (user_id)");
+
+            // google_event_id — original Google Calendar event ID, needed for Calendar write-back
+            jdbc.getJdbcOperations().execute(
+                    "ALTER TABLE calendar.events ADD COLUMN IF NOT EXISTS google_event_id TEXT");
+
+            // Purge seed / demo rows that have no real user_id so they don't pollute real data
+            jdbc.getJdbcOperations().execute(
+                    "DELETE FROM gmail.emails     WHERE user_id = ''");
+            jdbc.getJdbcOperations().execute(
+                    "DELETE FROM calendar.events  WHERE user_id = ''");
+
+            log.info("Migrations applied — user_integrations + federated user_id + seed purge done");
         } catch (Exception e) {
             log.error("Migration failed: {}", e.getMessage());
         }

@@ -27,16 +27,33 @@ public class PolicyEngine {
     private final Map<String, Rule> actions = new LinkedHashMap<>();
 
     public PolicyEngine() {
+        // ── notion.tasks ──────────────────────────────────────────────────────────
+        actions.put("task.create",
+                new Rule("notion.tasks", StatementType.INSERT,
+                         Set.of("title", "status", "priority", "due_date", "project", "updated_at"),
+                         1, false));
         actions.put("task.update_status",
-                new Rule("notion.tasks", StatementType.UPDATE, Set.of("status"), 1, false));
+                new Rule("notion.tasks", StatementType.UPDATE, Set.of("status"),   1, false));
         actions.put("task.update_deadline",
                 new Rule("notion.tasks", StatementType.UPDATE, Set.of("due_date"), 1, true));
         actions.put("task.update_priority",
                 new Rule("notion.tasks", StatementType.UPDATE, Set.of("priority"), 1, false));
+        actions.put("task.update_title",
+                new Rule("notion.tasks", StatementType.UPDATE, Set.of("title"),    1, false));
+        actions.put("task.update_project",
+                new Rule("notion.tasks", StatementType.UPDATE, Set.of("project"),  1, false));
+        actions.put("task.delete",
+                new Rule("notion.tasks", StatementType.DELETE, Set.of(),           1, true));
+
+        // ── gmail.emails ──────────────────────────────────────────────────────────
         actions.put("reminder.archive",
                 new Rule("gmail.emails", StatementType.UPDATE, Set.of("is_archived"), 10, false));
+        actions.put("reminder.unarchive",
+                new Rule("gmail.emails", StatementType.UPDATE, Set.of("is_archived"), 10, false));
+        actions.put("reminder.mark_read",
+                new Rule("gmail.emails", StatementType.UPDATE, Set.of("is_unread"),   10, false));
         actions.put("reminder.delete_dup",
-                new Rule("gmail.emails", StatementType.DELETE, Set.of(), 5, true));
+                new Rule("gmail.emails", StatementType.DELETE, Set.of(),               5, true));
     }
 
     /** The closed set of whitelisted action types — the single source of truth for the planner. */
@@ -64,9 +81,13 @@ public class PolicyEngine {
             return PolicyDecision.deny(
                     "Action " + actionType + " expects " + rule.op() + " but query is " + query.type());
         }
-        for (String field : query.writeFields()) {
-            if (!rule.fields().contains(field)) {
-                return PolicyDecision.deny("Field not whitelisted for " + actionType + ": " + field);
+        // For INSERT/UPDATE: every inserted/updated column must be whitelisted.
+        // For DELETE: writeFields is empty — only the row-ceiling check applies.
+        if (!query.writeFields().isEmpty()) {
+            for (String field : query.writeFields()) {
+                if (!rule.fields().contains(field)) {
+                    return PolicyDecision.deny("Field not whitelisted for " + actionType + ": " + field);
+                }
             }
         }
         // Destructive-by-scale guard: deny anything exceeding the action's row ceiling.

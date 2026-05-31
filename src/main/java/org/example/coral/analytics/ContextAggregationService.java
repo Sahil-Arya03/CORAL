@@ -4,7 +4,9 @@ import org.example.coral.model.CoralResultSet;
 import org.example.coral.model.TimelineEvent;
 import org.springframework.stereotype.Service;
 
+import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -61,11 +63,10 @@ public class ContextAggregationService {
 
     private Instant parseTime(Object value) {
         if (value == null) return Instant.EPOCH;
-        try {
-            return Instant.parse(value.toString());
-        } catch (Exception e) {
-            return Instant.EPOCH;
-        }
+        if (value instanceof Timestamp ts)       return ts.toInstant();
+        if (value instanceof OffsetDateTime odt) return odt.toInstant();
+        if (value instanceof Instant i)          return i;
+        try { return Instant.parse(value.toString()); } catch (Exception e) { return Instant.EPOCH; }
     }
 
     private String str(Object value) {

@@ -1,5 +1,7 @@
 package org.example.coral.controller;
 
+import jakarta.servlet.http.HttpServletRequest;
+import org.example.coral.config.SecurityUtils;
 import org.example.coral.dto.ChatDtos.ActionResult;
 import org.example.coral.dto.ChatDtos.ChatRequest;
 import org.example.coral.dto.ChatDtos.ChatResponse;
@@ -36,21 +38,25 @@ public class ChatController {
     }
 
     @PostMapping("/chat/sync")
-    public ChatResponse chatSync(@RequestBody ChatRequest request) {
-        return orchestrator.handle(request);
+    public ChatResponse chatSync(@RequestBody ChatRequest request, HttpServletRequest httpRequest) {
+        long uid = resolveInternalId(httpRequest);
+        String clerkId = resolveClerkId(httpRequest);
+        return orchestrator.handle(request, uid, clerkId);
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chat(@RequestBody ChatRequest request) {
+    public SseEmitter chat(@RequestBody ChatRequest request, HttpServletRequest httpRequest) {
+        long uid = resolveInternalId(httpRequest);
+        String clerkId = resolveClerkId(httpRequest);
         SseEmitter emitter = new SseEmitter(60_000L);
-        sseExecutor.submit(() -> stream(request, emitter));
+        sseExecutor.submit(() -> stream(request, emitter, uid, clerkId));
         return emitter;
     }
 
-    private void stream(ChatRequest request, SseEmitter emitter) {
+    private void stream(ChatRequest request, SseEmitter emitter, long uid, String clerkId) {
         try {
             emitter.send(SseEmitter.event().name("status").data("{\"stage\":\"thinking\"}"));
-            ChatResponse response = orchestrator.handle(request);
+            ChatResponse response = orchestrator.handle(request, uid, clerkId);
             for (String word : response.text().split(" ")) {
                 emitter.send(SseEmitter.event().name("token").data(word + " "));
             }
@@ -67,5 +73,13 @@ public class ChatController {
     @PostMapping("/actions/confirm")
     public ActionResult confirm(@RequestBody ConfirmRequest request) {
         return orchestrator.confirm(request.token());
+    }
+
+    private long resolveInternalId(HttpServletRequest req) {
+        try { return SecurityUtils.getInternalUserId(req); } catch (Exception e) { return 1L; }
+    }
+
+    private String resolveClerkId(HttpServletRequest req) {
+        try { return SecurityUtils.getClerkUserId(req); } catch (Exception e) { return ""; }
     }
 }

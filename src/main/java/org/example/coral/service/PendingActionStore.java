@@ -19,7 +19,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PendingActionStore {
 
     public record Pending(String token, IntentResult intent, ValidatedQuery query,
-                          int estimatedRows, Instant expiresAt) {
+                          int estimatedRows, Instant expiresAt,
+                          long internalUserId, String clerkUserId) {
         public boolean expired() {
             return Instant.now().isAfter(expiresAt);
         }
@@ -28,9 +29,11 @@ public class PendingActionStore {
     private static final Duration TTL = Duration.ofMinutes(5);
     private final Map<String, Pending> store = new ConcurrentHashMap<>();
 
-    public Pending create(IntentResult intent, ValidatedQuery query, int estimatedRows) {
+    public Pending create(IntentResult intent, ValidatedQuery query, int estimatedRows,
+                          long internalUserId, String clerkUserId) {
         String token = UUID.randomUUID().toString();
-        Pending p = new Pending(token, intent, query, estimatedRows, Instant.now().plus(TTL));
+        Pending p = new Pending(token, intent, query, estimatedRows,
+                Instant.now().plus(TTL), internalUserId, clerkUserId);
         store.put(token, p);
         return p;
     }

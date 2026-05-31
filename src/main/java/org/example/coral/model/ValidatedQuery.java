@@ -17,7 +17,7 @@ public record ValidatedQuery(
         String normalizedSql,     // LIMIT-injected / canonicalized form actually run
         Map<String, Object> bindings
 ) {
-    public enum StatementType { SELECT, UPDATE, DELETE }
+    public enum StatementType { SELECT, INSERT, UPDATE, DELETE }
 
     public boolean isMutation() {
         return type != StatementType.SELECT;

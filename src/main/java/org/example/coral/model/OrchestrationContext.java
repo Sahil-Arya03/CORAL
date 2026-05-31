@@ -14,6 +14,7 @@ public class OrchestrationContext {
     private final String userPrompt;
     private final UUID sessionId;
     private final long userId;
+    private final String clerkUserId;
 
     private IntentResult intent;
     private java.util.Set<String> allowedTables;
@@ -26,15 +27,17 @@ public class OrchestrationContext {
     private String pendingActionToken;
     private List<Map<String, Object>> conversationHistory = List.of();
 
-    public OrchestrationContext(String userPrompt, UUID sessionId, long userId) {
+    public OrchestrationContext(String userPrompt, UUID sessionId, long userId, String clerkUserId) {
         this.userPrompt = userPrompt;
         this.sessionId = sessionId;
         this.userId = userId;
+        this.clerkUserId = clerkUserId;
     }
 
-    public String userPrompt() { return userPrompt; }
-    public UUID sessionId() { return sessionId; }
-    public long userId() { return userId; }
+    public String userPrompt()    { return userPrompt; }
+    public UUID sessionId()       { return sessionId; }
+    public long userId()          { return userId; }
+    public String clerkUserId()   { return clerkUserId; }
 
     public IntentResult intent() { return intent; }
     public void setIntent(IntentResult intent) { this.intent = intent; }
